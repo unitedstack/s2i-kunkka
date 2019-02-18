@@ -1,0 +1,283 @@
+---
+kind: Template
+apiVersion: v1
+metadata:
+  name: kunkka
+  annotations:
+    description: UnitedStack OpenStack Dashboard
+    tags: kunkka,nodejs
+    iconClass: icon-nodejs
+labels:
+  template: kunkka
+parameters:
+- name: NAME
+  displayName: Application Name
+  description: The name assigned to all of the frontend objects defined in this template.
+  required: true
+  value: kunkka
+- name: CPU_LIMIT
+  displayName: CPU Limit
+  required: true
+  description: Maximum amount of CPU the hermes webpacker container can use.
+  value: "1000m"
+- name: MEMORY_LIMIT
+  displayName: Memory Limit
+  required: true
+  description: Maximum amount of memory the hermes webpacker container can use.
+  value: 2Gi
+- name: DATA_VOL_SIZE
+  displayName: /var/lib/mysql volume size
+  value: 2Gi
+  description: The data volume size for mariadb
+  required: true
+- name: KEYSTONE_ENDPOINT_TYPE
+  displayName: Keystone Endpoint Type
+  required: true
+  description: Set keystone endpoint type, 'public' or 'internal'
+  value: public
+- name: KEYSTONE_URL
+  displayName: Keystone auth URL
+  required: true
+  description: Set keystone auth auth (e.g. http://192.168.1.20:5000)
+  value: http://127.0.0.1:5000
+- name: KEYSTONE_ADMIN_USERNAME
+  displayName: Keystone admin username
+  required: true
+  description: Set keystone admin username (e.g. kunkka)
+  value: kunkka
+- name: KEYSTONE_ADMIN_PASSWORD
+  displayName: Keystone admin password
+  required: true
+  description: Set keystone admin password (e.g. PyOw0XI6xNLFMOettXauYy8OFKKbZ3nGNJOvr1jZ)
+- name: KEYSTONE_ADMIN_PROJECT_ID
+  displayName: Keystone admin project id
+  required: true
+  description: Set keystone admin id (e.g. 66789e4ab6244fcf850b233a9a750af3)
+- name: KEYSTONE_DOMAIN_NAME
+  displayName: Keystone domain name
+  required: true
+  description: Set keystone domain name (e.g. Default)
+  value: Default
+- name: SOURCE_REPOSITORY_URL
+  displayName: Git Repository URL
+  required: true
+  description: The URL of the repository with your application source code.
+  value: git://git.ustack.com/ued/kunkka
+- name: SOURCE_REPOSITORY_REF
+  displayName: Git Reference
+  description: Set this to a branch name, tag or other ref of your repository if you
+    are not using the default branch.
+  value: "master"
+- name: GITLAB_WEBHOOK_SECRET
+  displayName: Gitlab Webhook Secret
+  description: A secret string used to configure the Gitlab webhook.
+  generate: expression
+  from: "[a-zA-Z0-9]{40}"
+objects:
+- kind: Service
+  apiVersion: v1
+  metadata:
+    name: "${NAME}"
+    annotations:
+      description: Exposes and load balances the application pods
+  spec:
+    ports:
+    - name: web
+      port: 5678
+      targetPort: 5678
+    selector:
+      name: "${NAME}"
+- kind: ImageStream
+  apiVersion: v1
+  metadata:
+    name: "${NAME}"
+    labels:
+      app: kunkka
+    annotations:
+      description: Keeps track of changes in the application image
+- kind: ConfigMap
+  apiVersion: v1
+  metadata:
+    name: "${NAME}"
+    labels:
+      app: kunkka
+    annotations:
+      description: Runtime configuration of kunkka
+  data:
+    kunkka-config: |
+      'use strict';
+      module.exports = appInfo => {
+        const config : {
+          sequelize : {
+            dialect: 'mysql',
+            host: '127.0.0.1',
+            port: 3306,
+            username: 'root',
+            password: '', 
+            database: 'kunkka',
+            app: true,
+            agent: true,
+            timezone: '+08:00',
+          };
+          redis : {
+            client: {
+              host: '127.0.0.1',
+              port: 6379,
+              password: '',
+              db: 1,
+            },
+          };
+          openstack : {
+            region: [
+              { 
+                name: {
+                  en: 'regionOne',
+                  'zh-CN': '一区',
+                },
+                id: 'RegionOne',
+              },
+            ],
+            keystone: {
+              endpointType: "${KEYSTONE_ENDPOINT_TYPE}",
+              url: "${KEYSTONE_URL}",
+              username: "${KEYSTONE_ADMIN_USERNAME}",
+              domain: "${KEYSTONE_DOMAIN_NAME}",
+              projectId: "${KEYSTONE_ADMIN_PROJECT_ID}",
+              password: "${KEYSTONE_ADMIN_PASSWORD}",
+            },
+            neutron: {
+              networkVlanranges: [ 'datacentre:1:1000', 'datacentre2:1001:2000' ],
+            },
+          };
+        };
+        return config;
+      };
+- kind: BuildConfig
+  apiVersion: v1
+  metadata:
+    name: "${NAME}"
+    annotations:
+      description: Defines how to build the application
+  spec:
+    source:
+      type: Git
+      git:
+        uri: "${SOURCE_REPOSITORY_URL}"
+        ref: "${SOURCE_REPOSITORY_REF}"
+      contextDir: "/"
+      sourceSecret:
+        name: gitlab-kunkka-source-secret
+    strategy:
+      type: Source
+      sourceStrategy:
+        from:
+          kind: ImageStreamTag
+          name: s2i-kunkka-builder:latest
+    output:
+      to:
+        kind: ImageStreamTag
+        name: "${NAME}:latest"
+    triggers:
+    - type: ImageChange
+    - type: ConfigChange
+    - type: Gitlab
+      gitlab:
+        secret: "${GITLAB_WEBHOOK_SECRET}"
+- apiVersion: v1
+  kind: PersistentVolumeClaim
+  metadata:
+    name: ${NAME}-mariadb-storage
+  spec:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: ${DATA_VOL_SIZE}
+- kind: DeploymentConfig
+  apiVersion: v1
+  metadata:
+    name: "${NAME}"
+    annotations:
+      description: Defines how to deploy the application server
+  spec:
+    strategy:
+      type: Rolling
+    triggers:
+    - type: ImageChange
+      imageChangeParams:
+        automatic: true
+        containerNames:
+        - kunkka
+        from:
+          kind: ImageStreamTag
+          name: "${NAME}:latest"
+    - type: ConfigChange
+    replicas: 1
+    selector:
+      name: "${NAME}"
+    template:
+      metadata:
+        name: "${NAME}"
+        labels:
+          name: "${NAME}"
+      spec:
+        containers:
+        - name: kunkka
+          image: "${NAME}"
+          ports:
+          - containerPort: 5678
+          readinessProbe:
+            timeoutSeconds: 3
+            initialDelaySeconds: 5
+            httpGet:
+              path: "/"
+              port: 5678
+          livenessProbe:
+            timeoutSeconds: 3
+            initialDelaySeconds: 30
+            httpGet:
+              path: "/"
+              port: 5678
+          resources:
+            limits:
+              cpu: "${CPU_LIMIT}"
+              memory: "${MEMORY_LIMIT}"
+            requests:
+              cpu: 200m
+              memory: 500Mi
+        - name: redis
+          image: "redis:3.2.12"
+          imagePullPolicy: IfNotPresent
+          ports:
+          - containerPort: 6379
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+            requests:
+              cpu: "100m"
+              memory: "200Mi"
+        - name: mariadb
+          image: "mariadb:10.1.20"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MYSQL_ALLOW_EMPTY_PASSWORD
+              value: yes
+            - name: MYSQL_DATABASE
+              value: kunkka
+          volumeMounts:
+            - mountPath: /var/lib/mysql
+              name: ${NAME}-mariadb-storage
+          ports:
+          - containerPort: 3306
+          resources:
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+            requests:
+              cpu: "100m"
+              memory: "200Mi"
+        volumes:
+          - name: ${NAME}-mariadb-storage
+            persistentVolumeClaim:
+              claimName: ${NAME}-mariadb-storage
