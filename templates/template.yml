@@ -30,6 +30,11 @@ parameters:
   value: 2Gi
   description: The data volume size for mariadb
   required: true
+- name: MIRANA_URL
+  displayName: MIRANA URL
+  required: true
+  description: Set mirana url (e.g. ws://192.168.1.20:5679)
+  value: ws://127.0.0.1:5679
 - name: KEYSTONE_ENDPOINT_TYPE
   displayName: Keystone Endpoint Type
   required: true
@@ -38,7 +43,7 @@ parameters:
 - name: KEYSTONE_URL
   displayName: Keystone auth URL
   required: true
-  description: Set keystone auth auth (e.g. http://192.168.1.20:5000)
+  description: Set keystone auth url (e.g. http://192.168.1.20:5000)
   value: http://127.0.0.1:5000
 - name: KEYSTONE_ADMIN_USERNAME
   displayName: Keystone admin username
@@ -104,51 +109,180 @@ objects:
     annotations:
       description: Runtime configuration of kunkka
   data:
-    kunkka-config: |
+    config.prod.js: |
       'use strict';
+      
+      const { join } = require('path');
+      const Boom = require('boom');
+      
+      let telemetry;
+      try {
+        telemetry = require('./telemetry');
+      } catch (e) {
+        telemetry = {
+          hour: '60',
+          day: '300',
+          week: '600',
+          month: '3600',
+          year: '10800',
+        };
+      }
       module.exports = appInfo => {
-        const config : {
-          sequelize : {
-            dialect: 'mysql',
-            host: '127.0.0.1',
-            port: 3306,
-            username: 'root',
-            password: '', 
-            database: 'kunkka',
-            app: true,
-            agent: true,
-            timezone: '+08:00',
-          };
-          redis : {
+        const config = {};
+      
+        config.cluster = {
+          listen: {
+            port: 5678,
+            hostname: '0.0.0.0'
+          },
+        };
+      
+        config.sequelize = {
+          dialect: 'mysql',
+          host: '127.0.0.1',
+          port: 3306,
+          username: 'root',
+          password: '',
+          database: 'kunkka',
+          app: true,
+          agent: true,
+          timezone: '+08:00',
+        };
+      
+        config.redis = {
             client: {
               host: '127.0.0.1',
               port: 6379,
               password: '',
-              db: 1,
+              db: 15,
             },
-          };
-          openstack : {
-            region: [
-              { 
-                name: {
-                  en: 'regionOne',
-                  'zh-CN': '一区',
-                },
-                id: 'RegionOne',
+        };
+      
+        config.staticFileSource = {
+          manifestUrl: '',
+        };
+      
+        config.websocket = {
+          RegionOne: "${MIRANA_URL}",
+        };
+      
+        config.openstack = {
+          region: [
+            {
+              name: {
+                en: 'RegionOne',
+                'zh-CN': '一区',
               },
-            ],
-            keystone: {
-              endpointType: "${KEYSTONE_ENDPOINT_TYPE}",
-              url: "${KEYSTONE_URL}",
-              username: "${KEYSTONE_ADMIN_USERNAME}",
-              domain: "${KEYSTONE_DOMAIN_NAME}",
-              projectId: "${KEYSTONE_ADMIN_PROJECT_ID}",
-              password: "${KEYSTONE_ADMIN_PASSWORD}",
+              id: 'RegionOne',
             },
-            neutron: {
-              networkVlanranges: [ 'datacentre:1:1000', 'datacentre2:1001:2000' ],
-            },
-          };
+          ],
+          keystone: {
+            endpointType: "${KEYSTONE_ENDPOINT_TYPE}",
+            url: "${KEYSTONE_URL}",
+            username: "${KEYSTONE_ADMIN_USERNAME}",
+            domain: "${KEYSTONE_DOMAIN_NAME}",
+            projectId: "${KEYSTONE_ADMIN_PROJECT_ID}",
+            password: "${KEYSTONE_ADMIN_PASSWORD}",
+            tokenKey: 'captain_keystone_token',
+          },
+          neutron: {
+            networkVlanranges: ['physnet1:1:1000',],
+          },
+        };
+      
+        config.telemetry = telemetry;
+        config.no_services = [];
+        config.admin_email = 'example@unitedstack.com';
+        config.smtp = {
+          host: 'smtp.unitedstack.com',
+          port: 465,
+          secure: true,
+          auth: {
+            user: 'example@unitedstack.com',
+            pass: 'example',
+          },
+        };
+        config.pay = {
+          currency: {
+            ISO4217: 'CNY',
+            name: '人民币',
+            unit: '元',
+          },
+          paypal: {
+            mode: 'live',
+            client_id: '',
+            client_secret: '',
+          },
+          alipay: {
+            service: 'example',
+            partner: 'example',
+            partnerKey: 'example',
+            seller_id: 'example',
+            seller_account_name: 'example',
+            seller_email: 'example',
+            subject: '充值',
+            body: '金额',
+            _input_charset: 'utf-8',
+            payment_type: '1',
+            gateway: 'https://mapi.alipay.com/gateway.do?',
+          },
+        };
+        config.passportSaml = {
+          mountRouter: true,
+          routersNOTMount: [ 'ssoCallback' ],
+          idpMetadataPath: '/sso/saml2.0/metadata',
+          idpConfigPath: '/public/config',
+          idpHost: 'http://10.0.81.100:5700',
+          issuer: 'http://10.0.81.100',
+          cert: `-----BEGIN CERTIFICATE-----
+      MIIDNjCCAh6gAwIBAgIUZnSyBPa42t4Ua2rhGb5si/pxpz4wDQYJKoZIhvcNAQEL
+      BQAwRzELMAkGA1UEBhMCQ04xCzAJBgNVBAgMAkJKMQswCQYDVQQHDAJCSjEQMA4G
+      A1UECgwHVEZDbG91ZDEMMAoGA1UEAwwDVVVTMCAXDTE4MTIxMjEwMDYzOFoYDzIx
+      MTgxMTE4MTAwNjM4WjBHMQswCQYDVQQGEwJDTjELMAkGA1UECAwCQkoxCzAJBgNV
+      BAcMAkJKMRAwDgYDVQQKDAdURkNsb3VkMQwwCgYDVQQDDANVVVMwggEiMA0GCSqG
+      SIb3DQEBAQUAA4IBDwAwggEKAoIBAQC9seNwy3eQQ+XOPUs9XAzYQj97SfVxy0Na
+      HhIsCh6WilGA1TN3RZ642u62ETosO886FBT7m1wqNkUVnuFYddiQ8vFkik7HonD7
+      /jp4XZf7h39fGqnLoA7jCSL6SYCe5NOTeiQJULcQf2klxl+tIT2myfZlTg1U9PzV
+      lkgbolct1kWyE0bDrIXKsjQnuOxqb6rviWpAJYV0ktyKr3T/3QkiD8ySyMY+sh2k
+      +4o9MpocTEKFtnVvsiU1TrFoxFoDIbnit/1QN4yGfh5y+iJ0CyjSXXieOcSYo4nd
+      sYGxT7VBHZ7x5O6rFJPTTn2r/Hr6GBWB1BGvsRKfs6I7DWIgWPknAgMBAAGjGDAW
+      MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDANBgkqhkiG9w0BAQsFAAOCAQEAhGeUKSPK
+      CAvtY6HMmfKliRkAkQz1dU7aYNK+Lh4z52dsnzxqXO15Qwc5bCnxPf246PVXsD/8
+      FDTVQWtFfycQiPtRyp2/M4D8NXHKonXaxf//mhSzkNpv+WYAA+TLsttm46utIrJ4
+      dro9Eepq1vbsiRkncW7ZwpUskUiQHuOPFcOvO1HqVmLckrAQtInXhx965oEe9t88
+      ps/askqpvY9PU3je68nB9DzREAgeSoFADLDQnw+pWzxpB1zSLOEUozdEKfeO1R9P
+      CWLMjQ5s54lKhAxf3Gi0SheD4a+DCratItRMzXwSGjZ3QNPlul7ugLmFugzqRcMD
+      pEngrlkePmWrIQ==
+      -----END CERTIFICATE-----
+      `,
+          key: `-----BEGIN RSA PRIVATE KEY-----
+      MIIEowIBAAKCAQEAvbHjcMt3kEPlzj1LPVwM2EI/e0n1cctDWh4SLAoelopRgNUz
+      d0WeuNruthE6LDvPOhQU+5tcKjZFFZ7hWHXYkPLxZIpOx6Jw+/46eF2X+4d/Xxqp
+      y6AO4wki+kmAnuTTk3okCVC3EH9pJcZfrSE9psn2ZU4NVPT81ZZIG6JXLdZFshNG
+      w6yFyrI0J7jsam+q74lqQCWFdJLciq90/90JIg/MksjGPrIdpPuKPTKaHExChbZ1
+      b7IlNU6xaMRaAyG54rf9UDeMhn4ecvoidAso0l14njnEmKOJ3bGBsU+1QR2e8eTu
+      qxST0059q/x6+hgVgdQRr7ESn7OiOw1iIFj5JwIDAQABAoIBAQCFKncG/N8PeIq/
+      8Il8Jr2hp0gXTcEvREkg31FUdzon5iv3LDQ3+7jD/nVrfMaAvO/pzqU4SEU4IOb4
+      mZOKXRhOES5irTFGtgNo83yqeNGzstg4tGgUWWV5/jT+zVCsuujIdAsOOwp4W2k+
+      KneJ+3bjOo5taZC0XlOLwTcXpyxaMQcWEZseB3kG+pMDIjWbS1hS8fN7ULX8ZhGt
+      ZNpNCBjRjvaai16dOfSsV0Pm2wzhL6utlRXLWbfNvsyMNch/ID8di3NpuHsf++XU
+      ayOIs0SmZow0MCb47RrFEO5YeGDIp1kvKJ+6DE9t4ct3H5+VPffwesgj5/8zw+kN
+      wZxfGDkhAoGBAOTueG6WUxT+nUsAQsbLFsQ5d+4AmQOOcpdo8dHX8NJdq0uv6t91
+      JRbai54FdENmbfy/DwBZ89ekS0KeBd9Bzp2cehaIUWvbaavla6ix1w5APE9arltY
+      0hdJNexAeIac9hrCMS2isUyI3rNTQBS8b63VCDL0vwpK1CHP+CZzdKjRAoGBANQf
+      w4CUTE7yVVih4zcz+6ZpzS+WH7M1s6oLbiV8O1nrUQtAqPSlFC4Z9Tz2LzJeQn5C
+      Lc0qn6R33VqqZBaDd4trFJHP3LU+2k0DkksEz2XaYFA8+JglNueJXHoEb+DUMkdc
+      AE3AgGIPVKgXwqITRV0d6+xFJZ6FUkdm7DNi1oB3AoGAEYH7S9nLOMvQE7BNaw6V
+      CySp+1WoXhFCyjmIZNfy3uOy+fLWL4ix8XF9Q/R+07i9qJqj9w7qCw/RgaK8KDrM
+      JlmVLKv4Lht1lWPSO/B91eUrt5Xjx7CfQJCkwxCbJxBR8fHv+OF8VbIR9fzj5bIT
+      iGPGYL8+7PaUCpHxFF+4CEECgYA4TXIDx9j1P2cdzmJTva12vzBiCBPD6mYUpVII
+      CxBpzobFWNU/ki1oCyXHl4RxdwlpH8GuajjTW6laLk3AmAZ77+EWzrhDNzqUJHWJ
+      Ce7OlwbnZTeKkp4fGJt+G31ijJAH1siR2p146Z7LuvrDMCBCFfYP0U6p47MyFoRt
+      IzfSAwKBgGOQ9fLVeE2TvrCtbVnU6SO+KpsDlIbjSuRY/4pMYu0vG6zwD0JahW68
+      oxpI8WWidLfWmrPZwxRERczjM97S8LEHlMrJzTkcCrR6gvdhPU3/jDjv61JigpZh
+      hG+fop6sV8gqIpE5z6wiT2dvhrdDf9lxvkut3hHRM89dTP9kV8SM
+      -----END RSA PRIVATE KEY-----
+      `,
         };
         return config;
       };
